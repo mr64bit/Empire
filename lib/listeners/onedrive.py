@@ -43,22 +43,22 @@ class Listener:
             'BaseFolder' : {
                 'Description'   :   'The base Onedrive folder to use for comms.',
                 'Required'      :   True,
-                'Value'         :   '/Empire/'
+                'Value'         :   'empire'
             },
             'StagingFolder' : {
                 'Description'   :   'The nested Onedrive staging folder.',
                 'Required'      :   True,
-                'Value'         :   '/staging/'
+                'Value'         :   'staging'
             },
             'TaskingsFolder' : {
                 'Description'   :   'The nested Onedrive taskings folder.',
                 'Required'      :   True,
-                'Value'         :   '/taskings'
+                'Value'         :   'taskings'
             },
             'ResultsFolder' : {
                 'Description'   :   'The nested Onedrive results folder.',
                 'Required'      :   True,
-                'Value'         :   '/results/'
+                'Value'         :   'results'
             },
             'Launcher' : {
                 'Description'   :   'Launcher string.',
@@ -135,7 +135,7 @@ class Listener:
                 return False
             params = {'client_id': str(self.options['ClientID']['Value']).strip(),
                       'response_type': 'code',
-                      'redirect_uri': 'https://login.live.com/oauth20_desktop.srf',
+                      'redirect_uri': self.options['RedirectURI']['Value'],
                       'scope': 'files.readwrite offline_access'}
             req = Request('GET','https://login.microsoftonline.com/common/oauth2/v2.0/authorize', params = params)
             prep = req.prepare()
@@ -156,23 +156,32 @@ class Listener:
                       'grant_type': 'authorization_code',
                       'scope':'files.readwrite offline_access',
                       'code': code,
-                      'redirect_uri': 'http://localhost'}
+                      'redirect_uri': redirectURI}
             try:
                 r = s.post('https://login.microsoftonline.com/common/oauth2/v2.0/token', data=params)
                 s.headers['Authorization'] = "Bearer " + r.json()['access_token']
-            except: KeyError
-                print helpers.color("[!] Something went wrong, HTTP response %d, error code %s: %s" % r.code, r.json()['error_codes']), r.json()['error_description']
-            return r.json()
+                # self.mainMenu.listeners.update_listener_options(listenerName, "RefreshToken", r.json()['refresh_token'])
+                print "in 'get_token'"
+                rToken = r.json()
+                rToken['update'] = True
+                return rToken
+            except KeyError, e:
+                print helpers.color("[!] Something went wrong, HTTP response %d, error code %s: %s" % (r.status_code, r.json()['error_codes'], r.json()['error_description']))
+                raise
 
         def refresh_token(client_id, refresh_token):
             params = {'client_id': client_id,
                       'grant_type': 'refresh_token',
-                      'scope':'files.readwrite offline_access',
+                      'scope': 'files.readwrite offline_access',
                       'refresh_token': refresh_token,
-                      'redirect_uri': 'https://login.live.com/oauth20_desktop.srf'}
+                      'redirect_uri': redirectURI}
             r = s.post('https://login.microsoftonline.com/common/oauth2/v2.0/token', data=params)
             s.headers['Authorization'] = "Bearer " + r.json()['access_token']
-            return r.json()
+            # self.mainMenu.listeners.update_listener_options(listenerName, "RefreshToken", r.json()['refresh_token'])
+            print("in 'refresh_token'")
+            rToken = r.json()
+            rToken['update'] = True
+            return rToken
 
         def test_token(client_id, token):
             headers = s.headers.copy()
@@ -182,11 +191,26 @@ class Listener:
 
             return request.ok
 
-        def setup_folders(self):
-            r = s.get("%s/drive/root:/%s" % (baseURL, baseFolder))
-            if(r.status_code == 404):
+        def setup_folders():
+            if not (test_token(clientID, token['access_token'])):
+                raise ValueError("Could not set up folders, access token invalid")
+
+            baseObject = s.get("%s/drive/root:/%s" % (baseURL, baseFolder))
+            if not (baseObject.status_code == 200):
                 print helpers.color("[*] Creating %s folder" % baseFolder)
-                
+                params = {'@microsoft.graph.conflictBehavior': 'rename', 'folder': {}, 'name': baseFolder}
+                baseObject = s.post("%s/drive/items/root/children" % baseURL, json=params)
+            else:
+                print helpers.color("[*] %s folder already exists" % baseFolder)
+
+            for item in [stagingFolder, taskingsFolder, resultsFolder]:
+                itemObject = s.get("%s/drive/root:/%s/%s" % (baseURL, baseFolder, item))
+                if not (itemObject.status_code == 200):
+                    print helpers.color("[*] Creating %s/%s folder" % (baseFolder, item))
+                    params = {'@microsoft.graph.conflictBehavior': 'rename', 'folder': {}, 'name': item}
+                    itemObject = s.post("%s/drive/items/%s/children" % (baseURL, baseObject.json()['id']), json=params)
+                else:
+                    print helpers.color("[*] %s/%s already exists" % (baseFolder, item))
 
         listenerOptions = copy.deepcopy(listenerOptions)
 
@@ -197,12 +221,34 @@ class Listener:
         authCode = listenerOptions['AuthCode']['Value']
         refreshToken = listenerOptions['RefreshToken']['Value']
         baseFolder = listenerOptions['BaseFolder']['Value']
-        stagingFolder = "/%s/%s" % (baseFolder, listenerOptions['StagingFolder']['Value'].strip('/'))
-        taskingsFolder = "/%s/%s" % (baseFolder, listenerOptions['TaskingsFolder']['Value'].strip('/'))
-        resultsFolder = "/%s/%s" % (baseFolder, listenerOptions['ResultsFolder']['Value'].strip('/'))
+        stagingFolder = listenerOptions['StagingFolder']['Value'].strip('/')
+        taskingsFolder = listenerOptions['TaskingsFolder']['Value'].strip('/')
+        resultsFolder = listenerOptions['ResultsFolder']['Value'].strip('/')
+        redirectURI = listenerOptions['RedirectURI']['Value']
         baseURL = "https://graph.microsoft.com/v1.0"
+        updateToken = False
 
         s = Session()
+
+        if(refreshToken):
+            token = refresh_token(clientID, refreshToken)
+        else:
+            token = get_token(clientID, authCode)
+
+        setup_folders()
+
+        while True:
+            time.sleep(int(pollInterval))
+            print(updateToken)
+
+            if token['update']:
+                print "In 'if updateToken'"
+                self.mainMenu.listeners.update_listener_options(listenerName, "RefreshToken", token['refresh_token'])
+                refreshToken = token['refresh_token']
+                token['update'] = False
+
+            search = s.get("%s/drive/items/root:/%s/%s:/children" % (baseURL, baseFolder, stagingFolder))
+            print search.json()
 
 
     def start(self, name=''):
