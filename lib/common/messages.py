@@ -24,7 +24,7 @@ def title(version):
     """
     Print the tool title, with version.
     """
-    os.system('clear')
+    #os.system('clear')
     print "================================================================"
     # print ' [Empire]  PowerShell/Python post-exploitation framework'
     print " [Empire]  Post-Exploitation Framework"
@@ -86,8 +86,8 @@ def loading():
                         ``.----.`
 
                 Welcome to the Empire"""
-    time.sleep(3)
-    os.system('clear')
+    #time.sleep(3)
+    #os.system('clear')
 
 
 def wrap_string(data, width=40, indent=32, indentAll=False, followingHeader=None):

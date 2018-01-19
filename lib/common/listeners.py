@@ -12,6 +12,7 @@ import os
 import pickle
 import hashlib
 import copy
+import traceback
 
 class Listeners:
     """
@@ -207,7 +208,6 @@ class Listeners:
             if name in self.activeListeners:
                 del self.activeListeners[name]
             print helpers.color("[!] Error starting listener: %s" % (e))
-
 
     def start_existing_listeners(self):
         """

