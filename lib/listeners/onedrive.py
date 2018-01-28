@@ -116,6 +116,16 @@ class Listener:
                 'Description'   :   'Redirect URI of the registered application',
                 'Required'      :   True,
                 'Value'         :   "https://login.live.com/oauth20_desktop.srf"
+            },
+            'SlackToken' : {
+                'Description'   :   'Your SlackBot API token to communicate with your Slack instance.',
+                'Required'      :   False,
+                'Value'         :   ''
+            },
+            'SlackChannel' : {
+                'Description'   :   'The Slack channel or DM that notifications will be sent to.',
+                'Required'      :   False,
+                'Value'         :   '#general'
             }
         }
 
@@ -323,7 +333,6 @@ class Listener:
                 r = s.post('https://login.microsoftonline.com/common/oauth2/v2.0/token', data=params)
                 s.headers['Authorization'] = "Bearer " + r.json()['access_token']
                 # self.mainMenu.listeners.update_listener_options(listenerName, "RefreshToken", r.json()['refresh_token'])
-                print "in 'get_token'"
                 r_token = r.json()
                 r_token['expires_at'] = time.time() + (int)(r_token['expires_in']) - 15
                 r_token['update'] = True
@@ -446,7 +455,6 @@ class Listener:
 
         while True:
             time.sleep(int(poll_interval))
-            print "ping..."
             try:
                 if time.time() > token['expires_at']:
                     token = renew_token(client_id, token['refresh_token'])
@@ -465,18 +473,21 @@ class Listener:
                             print "Stage 1"
                             dispatcher.send("[*] Downloading %s/%s, %d bytes" % (staging_folder,  item['name'], item['size']), sender="listeners/onedrive")
                             content = s.get(item['@microsoft.graph.downloadUrl']).content
-                            data = self.mainMenu.agents.handle_agent_data(staging_key, content, listener_options)
-                            for (language, return_val) in data:
-                                dispatcher.send("[*] Uploading %s/%s/%s_2.txt, %d bytes" % (base_folder, staging_folder, agent_name, len(return_val)), sender="listeners/onedrive")
-                                s.put("%s/drive/items/root:/%s/%s/%s_2.txt:/content" % (base_url, base_folder, staging_folder, agent_name), data=return_val)
-                                dispatcher.send("[*] Deleting %s/%s" % (staging_folder, item['name']), sender="listeners/onedrive")
-                                s.delete("%s/drive/items/%s" % (base_url, item['id']))
+                            lang, return_val = self.mainMenu.agents.handle_agent_data(staging_key, content, listener_options)[0]
+                            dispatcher.send("[*] Uploading %s/%s/%s_2.txt, %d bytes" % (base_folder, staging_folder, agent_name, len(return_val)), sender="listeners/onedrive")
+                            s.put("%s/drive/items/root:/%s/%s/%s_2.txt:/content" % (base_url, base_folder, staging_folder, agent_name), data=return_val)
+                            dispatcher.send("[*] Deleting %s/%s" % (staging_folder, item['name']), sender="listeners/onedrive")
+                            s.delete("%s/drive/items/%s" % (base_url, item['id']))
 
                         if stage == '3':
                             print "Stage 3"
                             dispatcher.send("[*] Downloading %s/%s, %d bytes" % (staging_folder,  item['name'], item['size']), sender="listeners/onedrive")
                             content = s.get(item['@microsoft.graph.downloadUrl']).content
-                            lang, return_val = self.mainMenu.agents.handle_agent_data(staging_key, content, listener_options)
+                            lang, return_val = self.mainMenu.agents.handle_agent_data(staging_key, content, listener_options)[0]
+                            dispatcher.send("[*] Uploading %s/%s/%s_4.txt, %d bytes" % (base_folder, staging_folder, agent_name, len(return_val)), sender="listeners/onedrive")
+                            s.put("%s/drive/items/root:/%s/%s/%s_4.txt:/content" % (base_url, base_folder, staging_folder, agent_name), data= return_val)
+                            dispatcher.send("[*] Deleting %s/%s" % (staging_folder, item['name']), sender="listeners/onedrive")
+                            s.delete("%s/drive/items/%s" % (base_url, item['id']))
 
                     except Exception, e:
                         print(traceback.format_exc())
@@ -484,6 +495,8 @@ class Listener:
 
             except Exception, e:
                 print(e)
+
+            s.close()
 
 
     def start(self, name=''):

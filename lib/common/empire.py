@@ -496,7 +496,6 @@ class MainMenu(cmd.Cmd):
             listener_menu = ListenersMenu(self)
             listener_menu.cmdloop()
         except Exception as e:
-            traceback.print_exc()
             raise e
 
 
