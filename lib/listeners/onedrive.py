@@ -683,7 +683,10 @@ class Listener:
                             dispatcher.send("[*] Invalid agent, deleting %s/%s" % (results_folder, item['name']), sender="listeners/onedrive")
                             s.delete("%s/drive/items/%s" % (base_url, item['id']))
                             continue
-                        seen_time = datetime.strptime(item['lastModifiedDateTime'], "%Y-%m-%dT%H:%M:%S.%fZ")
+                        try:
+                            seen_time = datetime.strptime(item['lastModifiedDateTime'], "%Y-%m-%dT%H:%M:%S.%fZ")
+                        except: #sometimes no ms for some reason...
+                            seen_time = datetime.strptime(item['lastModifiedDateTime'], "%Y-%m-%dT%H:%M:%SZ")
                         seen_time = helpers.utc_to_local(seen_time)
                         self.mainMenu.agents.update_agent_lastseen_db(agent_id, seen_time)
                         if(item['size'] > 1): #only need to download results if there's actually something there
