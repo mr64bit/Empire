@@ -96,7 +96,7 @@ class Listener:
             'DefaultProfile' : {
                 'Description'   :   'Default communication profile for the agent.',
                 'Required'      :   True,
-                'Value'         :   "/admin/get.php,/news.php,/login/process.php|Mozilla/5.0 (Windows NT 6.1; WOW64; Trident/7.0; rv:11.0) like Gecko"
+                'Value'         :   "N/A|Microsoft SkyDriveSync 17.005.0107.0008 ship; Windows NT 10.0 (16299)"
             },
             'KillDate' : {
                 'Description'   :   'Date for the listener to exit (MM/dd/yyyy).',
